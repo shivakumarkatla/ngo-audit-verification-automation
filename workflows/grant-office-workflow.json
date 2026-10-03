@@ -1,0 +1,606 @@
+{
+  "name": "GrantOffice Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "55b39942-2a68-4a73-ad61-05a56292755f",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -256,
+        -32
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $json.callback_query.id }}",
+        "additionalFields": {
+          "text": "Decision Submitted"
+        }
+      },
+      "id": "b8cdd4f8-21cd-4972-b45d-082c9d47cb05",
+      "name": "Answer Query a callback1",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        -32
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull directly from the Trigger node to avoid being wiped by intermediate Telegram response nodes\nconst triggerData = $('Telegram Trigger').first()?.json || {};\nconst inputData = $input.first()?.json || {};\n\n// Check all possible paths where Telegram or n8n places the string\nconst callbackData = \n  triggerData.callback_query?.data ||\n  triggerData.body?.callback_query?.data ||\n  inputData.callback_query?.data ||\n  inputData.body?.callback_query?.data ||\n  '';\n\n// Trim and split by colon delimiter: ACTION:AUDIT_ID:GRANT_ID:TRAINER_CHAT_ID\nconst parts = callbackData.trim().split(':');\n\nconst rawAction = (parts[0] || '').trim().toUpperCase();\nconst auditId = (parts[1] || '').trim();\nconst grantId = (parts[2] || '').trim();\nconst trainerChatId = (parts[3] || '').trim();\n\nconst reviewer = \n  triggerData.callback_query?.from?.first_name || \n  triggerData.body?.callback_query?.from?.first_name || \n  'GrantOfficer';\n\n// Formatted strictly in Indian Standard Time (IST / Asia/Kolkata)\nconst istTimestamp = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Asia/Kolkata',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit',\n  hour: '2-digit',\n  minute: '2-digit',\n  second: '2-digit',\n  hour12: false\n}).format(new Date()).replace(',', '');\n\nconst statusMap = {\n  'APPROVE': 'APPROVED',\n  'OVERRIDE': 'OVERRIDDEN_APPROVED',\n  'REJECT': 'REJECTED',\n  'HOLD': 'HELD_FOR_AUDIT'\n};\n\nconst decisionStatus = statusMap[rawAction] || 'UNKNOWN_ACTION';\nconst isApproved = (rawAction === 'APPROVE' || rawAction === 'OVERRIDE');\n\nconst tranches = {\n  'CSR-APEX-01': 25000,\n  'CSR-INDUS-02': 12000\n};\n\nreturn {\n  json: {\n    raw_received_data: callbackData,\n    action: rawAction,\n    decision_status: decisionStatus,\n    audit_id: auditId,\n    grant_id: grantId,\n    trainer_chat_id: trainerChatId,\n    reviewer_name: reviewer,\n    timestamp: istTimestamp,\n    approval_timestamp: istTimestamp,\n    is_approved: isApproved,\n    disbursement_amount: isApproved ? (tranches[grantId] || 10000) : 0,\n    txn_id: isApproved ? ('TXN-' + Math.floor(100000 + Math.random() * 900000)) : ''\n  }\n};"
+      },
+      "id": "6d32ac41-98f8-43b0-a346-bae80ba334fa",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Hackathon DB",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 742781284,
+          "mode": "list",
+          "cachedResultName": "Field_Audits",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Audit_ID": "={{ $json.audit_id }}",
+            "Human_Decision": "={{ $json.decision_status }}",
+            "Reviewer_Action_Timestamp": "={{ $json.timestamp }}"
+          },
+          "matchingColumns": [
+            "Audit_ID"
+          ],
+          "schema": [
+            {
+              "id": "Audit_ID",
+              "displayName": "Audit_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Program_Tag",
+              "displayName": "Program_Tag",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Grant_ID",
+              "displayName": "Grant_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Headcount_Claimed",
+              "displayName": "Headcount_Claimed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Headcount_Observed",
+              "displayName": "Headcount_Observed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Equipment_Detected",
+              "displayName": "Equipment_Detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Status",
+              "displayName": "AI_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Discrepancy_Summary",
+              "displayName": "Discrepancy_Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Human_Decision",
+              "displayName": "Human_Decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Reviewer_Action_Timestamp",
+              "displayName": "Reviewer_Action_Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "30c75f5e-1238-41ec-8ae3-1cc7e43022fc",
+      "name": "Update row in sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        256,
+        -32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "29a46dba-d2a9-4b3b-8001-e7eccf4e214f",
+              "leftValue": "={{ $('Code in JavaScript').first().json.is_approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bb0a9071-26e4-416a-a0b2-31feb1e4096e",
+      "name": "If",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        416,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Hackathon DB",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 132876018,
+          "mode": "list",
+          "cachedResultName": "Grant_Transactions",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Grant_ID": "={{ $('Code in JavaScript').item.json.grant_id }}",
+            "Audit_ID": "={{ $('Code in JavaScript').item.json.audit_id }}",
+            "Milestone_Number": "M-1",
+            "Approval_Timestamp": "={{ $('Code in JavaScript').item.json.approval_timestamp }}",
+            "Amount_Authorized": "={{ $('Code in JavaScript').item.json.disbursement_amount }}",
+            "Transaction_ID": "={{ $('Code in JavaScript').item.json.txn_id }}",
+            "Authorized_By": "={{ $('Code in JavaScript').item.json.reviewer_name }}",
+            "Dispatch_Recipient": "Implementing Agency / Field Partner",
+            "Documentation_Status": "={{ $('Code in JavaScript').first().json.action === 'OVERRIDE' ? 'VERIFIED_EXCEPTION' : 'VERIFIED' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Transaction_ID",
+              "displayName": "Transaction_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Grant_ID",
+              "displayName": "Grant_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Audit_ID",
+              "displayName": "Audit_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Milestone_Number",
+              "displayName": "Milestone_Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount_Authorized",
+              "displayName": "Amount_Authorized",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Approval_Timestamp",
+              "displayName": "Approval_Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Documentation_Status",
+              "displayName": "Documentation_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Authorized_By",
+              "displayName": "Authorized_By",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Dispatch_Recipient",
+              "displayName": "Dispatch_Recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "35db067a-60f9-4493-83e0-7949789dbca9",
+      "name": "Append Grant TxN",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        592,
+        -160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "text": "=🎉 DISBURSEMENT COMPLETED  \n\nAudit ID: {{ $('Code in JavaScript').first().json.audit_id }} \nGrant ID: {{ $('Code in JavaScript').first().json.grant_id }} \nAmount Released: ₹{{ $('Code in JavaScript').first().json.disbursement_amount }} \nTxn ID: {{ $('Code in JavaScript').first().json.txn_id }} \nStatus: {{ $('Code in JavaScript').first().json.action }} by {{ $('Code in JavaScript').first().json.reviewer_name }}  \n\nFinancial ledger recorded in Grant_Transactions.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "4b436344-d724-4906-94dc-9ab285c28377",
+      "name": "Notify Grant Officer",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        752,
+        -160
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "text": "=⛔ CLAIM REJECTED / HELD \n\nAudit ID: {{ $('Code in JavaScript').first().json.audit_id }} \nGrant ID: {{ $('Code in JavaScript').first().json.grant_id }} \nStatus: {{ $('Code in JavaScript').first().json.decision_status }} \nReviewer: {{ $('Code in JavaScript').first().json.reviewer_name }}  \n\nNo disbursement generated. Row marked as REJECTED in Field_Audits.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "1b4941b0-c6f4-40a2-bf22-fabaf96b104c",
+      "name": "Notify Grant Officer1",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        80
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Code in JavaScript').item.json.trainer_chat_id }}",
+        "text": "=⚠️ FIELD AUDIT NOTICE\n\nAudit ID: {{ $('Code in JavaScript').first().json.audit_id }}\nStatus: {{ $('Code in JavaScript').first().json.decision_status}}\n\nYour submission requires clarification or re-verification. No funds have been released. Please check with your program coordinator.\n",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        784,
+        80
+      ],
+      "id": "26d71dde-6edd-43e2-8504-59c1e8a67a3a",
+      "name": "Notify Trainer / Incharge 1",
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Field Audit Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Code in JavaScript').item.json.trainer_chat_id }}",
+        "text": "=✅ MILESTONE APPROVED\n\nGrant ID: {{ $('Code in JavaScript').first().json.grant_id }} \nAudit ID: {{ $('Code in JavaScript').first().json.audit_id }} \nDisbursement: ₹{{ $('Code in JavaScript').first().json.disbursement_amount }} released. \nTxn ID: {{ $('Code in JavaScript').first().json.txn_id }}  \n\nYour milestone documentation has passed governance verification.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        928,
+        -160
+      ],
+      "id": "1950ddf8-a549-49d4-801e-2f4b1ee4f8f1",
+      "name": "Notify Trainer / Incharge",
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Field Audit Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Answer Query a callback1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer Query a callback1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update row in sheet": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Append Grant TxN",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Grant Officer1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Grant TxN": {
+      "main": [
+        [
+          {
+            "node": "Notify Grant Officer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Grant Officer": {
+      "main": [
+        [
+          {
+            "node": "Notify Trainer / Incharge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Grant Officer1": {
+      "main": [
+        [
+          {
+            "node": "Notify Trainer / Incharge 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Trainer / Incharge 1": {
+      "main": [
+        []
+      ]
+    },
+    "Notify Trainer / Incharge": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}

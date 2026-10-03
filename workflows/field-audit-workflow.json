@@ -1,0 +1,599 @@
+{
+  "name": "FieldAudit workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {
+          "download": true,
+          "chatIds": ""
+        }
+      },
+      "id": "35db0124-d4d4-4901-952c-22292a264945",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -592,
+        -304
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Field Audit Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ($json.message?.photo && $json.message?.caption) ? \"COMPLETE\" : \"NO\" }}",
+                    "rightValue": "COMPLETE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "c6fc9cb5-98a3-4b2e-bcf8-7d8396876217"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Complete Submission."
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9d656bcb-c746-4fc4-831a-063041453ba1",
+                    "leftValue": "={{ ($json.message?.photo && !$json.message?.caption) ? \"PHOTO_ONLY\" : \"NO\" }}",
+                    "rightValue": "PHOTO_ONLY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Missing Caption."
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "b80d1ff5-b6a5-4a2f-937d-f2a47c910c10",
+                    "leftValue": "={{ ($json.message?.text && !$json.message?.photo) ? \"TEXT_ONLY\" : \"NO\" }}",
+                    "rightValue": "TEXT_ONLY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Missing Photo."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "37397786-d70f-4883-ad36-ad4f2cf3add1",
+      "name": "Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -400,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawItem = $input.first()?.json || {};\n\n// 1. Pull dynamic caption directly from Telegram Trigger as the source of truth\nconst telegramTrigger = $('Telegram Trigger').first()?.json || {};\nconst caption = telegramTrigger.message?.caption || rawItem.message?.caption || '';\n\n// Extract the first integer in caption (e.g. \"20 students\" -> 20)\nconst captionMatch = caption.match(/\\d+/);\nconst dynamicClaimedCount = captionMatch ? parseInt(captionMatch[0], 10) : null;\n\n// 2. Extract AI text output\nlet rawText = '';\nif (typeof rawItem.text === 'string') {\n  rawText = rawItem.text;\n} else if (typeof rawItem.response?.text === 'string') {\n  rawText = rawItem.response.text;\n} else if (rawItem.content?.parts?.[0]?.text) {\n  rawText = rawItem.content.parts[0].text;\n} else if (typeof rawItem.content === 'string') {\n  rawText = rawItem.content;\n} else if (rawItem.candidates?.[0]?.content?.parts?.[0]?.text) {\n  rawText = rawItem.candidates[0].content.parts[0].text;\n} else if (typeof rawItem === 'string') {\n  rawText = rawItem;\n}\n\nif (!rawText) {\n  throw new Error(\"No text found. Available keys in input: \" + JSON.stringify(Object.keys(rawItem)));\n}\n\n// Clean markdown wrappers\nlet clean = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();\nconst start = clean.indexOf('{');\nconst end = clean.lastIndexOf('}');\nif (start !== -1 && end !== -1) {\n  clean = clean.substring(start, end + 1);\n}\n\n// 3. Parse AI JSON\nlet parsed = {};\ntry {\n  parsed = JSON.parse(clean);\n} catch (e) {\n  clean = clean.replace(/[\\n\\r]/g, ' ').replace(/\\\\n/g, ' ');\n  parsed = JSON.parse(clean);\n}\n\n// 4. Resolve claimed and observed counts without hardcoded fallbacks\nconst claimedHeadcount = dynamicClaimedCount !== null \n  ? dynamicClaimedCount \n  : Number(parsed.claim?.headcount ?? parsed.claimed_count ?? parsed.headcount_claimed ?? 0);\n\nconst observedHeadcount = Number(\n  parsed.observed?.headcount_estimate ?? \n  parsed.visible_count ?? \n  parsed.headcount_observed ?? \n  0\n);\n\n// 5. Evaluate discrepancy and status\nconst hasDiscrepancy = claimedHeadcount !== observedHeadcount;\nconst aiStatus = (parsed.audit?.status || (hasDiscrepancy ? 'FLAGGED' : 'PASSED')).toUpperCase();\n\n// Generate IST timestamp\nconst timestamp = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Asia/Kolkata',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit',\n  hour: '2-digit',\n  minute: '2-digit',\n  second: '2-digit',\n  hour12: false\n}).format(new Date()).replace(',', '');\n\nconst auditId = 'AUD-2026-' + Math.floor(100 + Math.random() * 900);\nconst tag = (parsed.program_tag || 'PROG-LITERACY').trim().toUpperCase();\n\nconst grantMap = {\n  'PROG-ROBOTICS': 'CSR-APEX-01',\n  'PROG-LITERACY': 'CSR-INDUS-02'\n};\n\nconst equipmentDetected = (\n  parsed.observed?.equipment_detected === true || \n  parsed.equipment_detected === true || \n  String(parsed.observed?.equipment_detected).toLowerCase() === 'true' ||\n  String(parsed.equipment_detected).toLowerCase() === 'true'\n) ? 'TRUE' : 'FALSE';\n\nreturn {\n  json: {\n    audit_id: auditId,\n    timestamp: timestamp,\n    program_tag: tag,\n    grant_id: grantMap[tag] || 'CSR-INDUS-02',\n    headcount_claimed: claimedHeadcount,\n    headcount_observed: observedHeadcount,\n    equipment_detected: equipmentDetected,\n    ai_status: aiStatus,\n    discrepancy_summary: parsed.audit?.discrepancy_summary || parsed.audit_reasoning || (hasDiscrepancy ? `Discrepancy detected: Claimed ${claimedHeadcount}, observed ${observedHeadcount}.` : 'Headcount verified successfully.'),\n    human_decision: 'PENDING',\n    reviewer_action_timestamp: ''\n  }\n};"
+      },
+      "id": "c19710c5-54d3-4346-8922-1f127515df51",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        -384
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "📸 Photo received, but field notes are missing!  Please resend the photo with your field update typed into the \"Add a caption...\" box (include attendee headcount, materials/kits used, and your program tag like PROG-ROBOTICS or PROG-LITERACY).",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "5700d4e0-c20d-4bd4-a0c9-f524e2b35600",
+      "name": "Missing Caption Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        -224
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Field Audit Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=📝 Field note received: \"{{ $json.message.text }}\"  ⚠️ Visual verification required: Under CSR compliance guidelines, attendance claims cannot be audited without visual proof. Please upload the session photo with this report in the caption box.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "76ddf154-8111-4885-bd68-b13573fc353e",
+      "name": "Missing Image Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        -48
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Field Audit Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Hackathon DB",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 742781284,
+          "mode": "list",
+          "cachedResultName": "Field_Audits",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Audit_ID": "={{ $json.audit_id }}",
+            "Timestamp": "={{ $json.timestamp }}",
+            "Program_Tag": "={{ $json.program_tag }}",
+            "Grant_ID": "={{ $json.grant_id }}",
+            "Headcount_Claimed": "={{ $json.headcount_claimed }}",
+            "Headcount_Observed": "={{ $json.headcount_observed }}",
+            "Equipment_Detected": "={{ $json.equipment_detected }}",
+            "AI_Status": "={{ $json.ai_status }}",
+            "Discrepancy_Summary": "={{ $json.discrepancy_summary }}",
+            "Human_Decision": "={{ $json.human_decision }}",
+            "Reviewer_Action_Timestamp": "={{ $json.reviewer_action_timestamp }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Audit_ID",
+              "displayName": "Audit_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Program_Tag",
+              "displayName": "Program_Tag",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Grant_ID",
+              "displayName": "Grant_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Headcount_Claimed",
+              "displayName": "Headcount_Claimed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Headcount_Observed",
+              "displayName": "Headcount_Observed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Equipment_Detected",
+              "displayName": "Equipment_Detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Status",
+              "displayName": "AI_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Discrepancy_Summary",
+              "displayName": "Discrepancy_Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Human_Decision",
+              "displayName": "Human_Decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Reviewer_Action_Timestamp",
+              "displayName": "Reviewer_Action_Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        272,
+        -384
+      ],
+      "id": "57bafb8d-5192-40b3-a6ac-8aad63e6a81a",
+      "name": "Append row in Field_Audit",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a802eafb-efaf-4786-bdb5-f269dd7a9e87",
+              "leftValue": "={{ $json.AI_Status }}",
+              "rightValue": "VERIFIED",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        -240
+      ],
+      "id": "14df56ca-ecd2-45c7-96ae-94e7cc2ea4eb",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=🟢 CSR AUDIT: LOW-RISK VERIFICATION\n\nAudit ID: {{ $('Code in JavaScript').item.json.audit_id }}\nProgram: {{ $('Code in JavaScript').item.json.program_tag }}\nGrant ID: {{ $('Code in JavaScript').item.json.grant_id }}\nClaimed Headcount: {{ $('Code in JavaScript').item.json.headcount_claimed }}\nObserved Headcount: {{ $('Code in JavaScript').item.json.headcount_observed }}\nEquipment Detected: {{ $('Code in JavaScript').item.json.equipment_detected }}\n\nAI Observation: Field claim aligns with visual proof.\n\nAction required: Confirm fund release.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Confirm & Release Funds",
+                    "additionalFields": {
+                      "callback_data": "=APPROVE:{{ $('Code in JavaScript').first().json.audit_id }}:{{ $('Code in JavaScript').first().json.grant_id }}:{{ $('Telegram Trigger').first().json.message.chat.id }}"
+                    }
+                  },
+                  {
+                    "text": "🔍 Hold for Manual Audit",
+                    "additionalFields": {
+                      "callback_data": "=HOLD:{{ $('Code in JavaScript').first().json.audit_id }}:{{ $('Code in JavaScript').first().json.grant_id }}:{{ $('Telegram Trigger').first().json.message.chat.id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        624,
+        -384
+      ],
+      "id": "d34328cb-e5f9-49ac-8537-ceb539a862bd",
+      "name": "Send a text message",
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=🚨 CSR AUDIT ANOMALY: MANUAL REVIEW REQUIRED\n\nAudit ID: {{ $('Code in JavaScript').item.json.audit_id }}\nProgram: {{ $('Code in JavaScript').item.json.program_tag }}\nGrant ID: {{ $('Code in JavaScript').item.json.grant_id }}\nClaimed Headcount: {{ $('Code in JavaScript').item.json.headcount_claimed }}\nObserved Headcount: {{ $('Code in JavaScript').item.json.headcount_observed }}\nEquipment Detected: {{ $('Code in JavaScript').item.json.equipment_detected }}\n\nDiscrepancy Summary:\n\"{{ $('Code in JavaScript').item.json.discrepancy_summary }}\"\n\nAction required: Review discrepancy before moving funds.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "⚠️ Override & Release",
+                    "additionalFields": {
+                      "callback_data": "=OVERRIDE:{{ $('Code in JavaScript').first().json.audit_id }}:{{ $('Code in JavaScript').first().json.grant_id }}:{{ $('Telegram Trigger').first().json.message.chat.id }}"
+                    }
+                  },
+                  {
+                    "text": "❌ Reject Claim",
+                    "additionalFields": {
+                      "callback_data": "=REJECT:{{ $('Code in JavaScript').first().json.audit_id }}:{{ $('Code in JavaScript').first().json.grant_id }}:{{ $('Telegram Trigger').first().json.message.chat.id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        640,
+        -128
+      ],
+      "id": "5599d146-0949-4137-b5e7-cb7160cb223e",
+      "name": "Send a text message1",
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram Grant Officer Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.6-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.6-flash"
+        },
+        "text": "=You are an expert CSR compliance auditor. \n\nThe field trainer claims there are: {{ $('Telegram Trigger').first().json.message?.caption || 'Not specified' }}\n\nLook closely at the uploaded image and perform an audit:\n1. Count the exact number of people/students visibly present in the image.\n2. Compare the count visible in the image against the claimed count mentioned above.\n3. Determine if there is a discrepancy.\n\nReturn ONLY a clean JSON object (without markdown formatting or code blocks) using this schema:\n{\n  \"visible_count\": <number of students counted in photo>,\n  \"claimed_count\": <extract the integer from the claim text above, e.g. 20>,\n  \"discrepancy_detected\": <true or false>,\n  \"confidence_score\": <number between 0 and 1>,\n  \"audit_reasoning\": \"<short sentence describing findings>\"\n}",
+        "inputType": "binary",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        -384
+      ],
+      "id": "fc9c7eff-bfc9-4026-8678-2abb285ed62f",
+      "name": "Analyze an image1",
+      "credentials": {
+        "googlePalmApi": {
+          "name": "Google Gemini API account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Analyze an image1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Missing Caption Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Missing Image Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in Field_Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in Field_Audit": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze an image1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Missing Image Alert": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}
